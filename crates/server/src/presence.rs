@@ -3,9 +3,12 @@
 //! connection; the `ws` hub sends them.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use crate::protocol::{AppInfo, ErrorCode, Join, LeftReason, Limits, ProtoError, RiderState, RiderView, ServerMsg};
+use crate::protocol::{
+    AppInfo, ErrorCode, Join, LeftReason, Limits, ProtoError, RiderState, RiderUpdate, RiderView, ServerMsg,
+    UpdateEntry,
+};
 use crate::routes::Routes;
 
 pub type ConnId = u64;
@@ -34,7 +37,6 @@ struct Rider {
     name: String,
     state: RiderState,
     /// When the last state was accepted.
-    #[allow(dead_code)]
     last: Instant,
 }
 
@@ -132,13 +134,7 @@ impl Presence {
     pub fn join(&mut self, conn: ConnId, join: Join, now: Instant) -> Result<Vec<Delivery>, ProtoError> {
         let length = self.check_route(&join.route)?.length;
         let rider_name = || Some(join.rider.clone());
-        if join.state.distance >= length {
-            return Err(ProtoError::new(
-                ErrorCode::InvalidValue,
-                format!("distance must be less than the route length {length}"),
-            )
-            .with_rider(rider_name()));
-        }
+        check_distance(length, join.state.distance, &join.rider)?;
         let Some(c) = self.conns.get_mut(&conn) else {
             debug_assert!(false, "join without connect");
             return Ok(Vec::new());
@@ -185,6 +181,89 @@ impl Presence {
                     .with_rider(Some(rider.to_string())))
             }
         }
+    }
+
+    /// Applies a batch of state entries. Each entry is checked on its own: a bad one yields an error
+    /// and does not stop the others. The accepted entries go out as one `Updated` per route+room.
+    pub fn update(
+        &mut self,
+        conn: ConnId,
+        entries: Vec<UpdateEntry>,
+        now: Instant,
+    ) -> (Vec<Delivery>, Vec<ProtoError>) {
+        let mut errors = Vec::new();
+        let mut accepted: BTreeMap<RoomKey, Vec<RiderUpdate>> = BTreeMap::new();
+        let min_interval = self.min_update_interval();
+        if let Some(c) = self.conns.get_mut(&conn) {
+            for e in entries {
+                let fail = |code, msg: String| ProtoError::new(code, msg).with_rider(Some(e.rider.clone()));
+                let Some(r) = c.riders.get_mut(&e.rider) else {
+                    errors.push(fail(ErrorCode::UnknownRider, "rider has not joined".to_string()));
+                    continue;
+                };
+                if let Some(route) = self.routes.get(&r.route) {
+                    if let Err(err) = check_distance(route.length, e.state.distance, &e.rider) {
+                        errors.push(err);
+                        continue;
+                    }
+                }
+                if now.saturating_duration_since(r.last) < min_interval {
+                    errors.push(fail(ErrorCode::RateLimited, "updates are coming too fast".to_string()));
+                    continue;
+                }
+                r.last = now;
+                r.state = e.state.clone();
+                accepted
+                    .entry((r.route.clone(), r.room.clone()))
+                    .or_default()
+                    .push(RiderUpdate {
+                        id: r.id.clone(),
+                        state: e.state,
+                    });
+            }
+        } else {
+            debug_assert!(false, "update without connect");
+        }
+        let deliveries = accepted
+            .into_iter()
+            .flat_map(|(key, riders)| {
+                let msg = ServerMsg::Updated {
+                    route: key.0.clone(),
+                    room: key.1.clone(),
+                    riders,
+                };
+                self.to_subscribers(&key, conn, msg)
+            })
+            .collect();
+        (deliveries, errors)
+    }
+
+    /// Removes the riders whose last accepted state is `rider_timeout_s` old or older.
+    pub fn expire(&mut self, now: Instant) -> Vec<Delivery> {
+        let timeout = Duration::from_secs(u64::from(self.limits.rider_timeout_s));
+        let mut expired: Vec<(ConnId, Rider)> = Vec::new();
+        for (id, c) in &mut self.conns {
+            let stale: Vec<String> = c
+                .riders
+                .iter()
+                .filter(|(_, r)| now.saturating_duration_since(r.last) >= timeout)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for k in stale {
+                if let Some(r) = c.riders.remove(&k) {
+                    expired.push((*id, r));
+                }
+            }
+        }
+        expired
+            .iter()
+            .flat_map(|(conn, r)| self.left(*conn, r, LeftReason::Timeout))
+            .collect()
+    }
+
+    /// 80% of the nominal interval between updates, which allows for network jitter.
+    fn min_update_interval(&self) -> Duration {
+        Duration::from_nanos(800_000_000 / u64::from(self.limits.max_update_hz.max(1)))
     }
 
     /// Removes the connection with its riders and subscriptions.
@@ -253,6 +332,17 @@ impl Presence {
             },
         )
     }
+}
+
+fn check_distance(length: f64, distance: f64, rider: &str) -> Result<(), ProtoError> {
+    if distance >= length {
+        return Err(ProtoError::new(
+            ErrorCode::InvalidValue,
+            format!("distance must be less than the route length {length}"),
+        )
+        .with_rider(Some(rider.to_string())));
+    }
+    Ok(())
 }
 
 fn view(app: &AppInfo, r: &Rider) -> RiderView {
@@ -535,5 +625,172 @@ mod tests {
         let c = p.live_counts();
         assert_eq!(c.len(), 1);
         assert_eq!((c["app-one"].connections, c["app-one"].riders), (2, 3));
+    }
+
+    use crate::protocol::{RiderUpdate, UpdateEntry};
+    use std::time::Duration;
+
+    fn entry(rider: &str, distance: f64) -> UpdateEntry {
+        UpdateEntry {
+            rider: rider.to_string(),
+            state: state(distance),
+        }
+    }
+
+    fn updated(d: &Delivery) -> &Vec<RiderUpdate> {
+        match &d.msg {
+            ServerMsg::Updated { riders, .. } => riders,
+            m => panic!("unexpected {m:?}"),
+        }
+    }
+
+    #[test]
+    fn update_batches_per_room() {
+        let mut p = presence();
+        let t0 = Instant::now();
+        p.connect(1, app("app-one"));
+        p.connect(2, app("app-two"));
+        p.join(1, join_msg("u-1", "A"), t0).unwrap();
+        p.join(1, join_msg("u-2", "B"), t0).unwrap();
+        p.join(1, join_in("u-3", V, "a", "C"), t0).unwrap();
+        p.subscribe(2, V, P).unwrap();
+        p.subscribe(2, V, "a").unwrap();
+        let t1 = t0 + Duration::from_secs(1);
+        let (d, errs) = p.update(1, vec![entry("u-1", 1.0), entry("u-3", 2.0), entry("u-2", 3.0)], t1);
+        assert!(errs.is_empty());
+        assert_eq!(d.len(), 2);
+        assert!(d.iter().all(|x| x.to == 2));
+        // Rooms in key order: "a" before "public".
+        assert!(matches!(&d[0].msg, ServerMsg::Updated { room, .. } if room == "a"));
+        assert_eq!(updated(&d[0]).len(), 1);
+        assert!(matches!(&d[1].msg, ServerMsg::Updated { room, .. } if room == "public"));
+        let ids: Vec<&str> = updated(&d[1]).iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["r1", "r2"]);
+        assert_eq!(updated(&d[1])[1].state.distance, 3.0);
+    }
+
+    #[test]
+    fn update_no_echo() {
+        let mut p = presence();
+        let t0 = Instant::now();
+        p.connect(1, app("app-one"));
+        p.join(1, join_msg("u-1", "A"), t0).unwrap();
+        p.subscribe(1, V, P).unwrap();
+        let (d, errs) = p.update(1, vec![entry("u-1", 1.0)], t0 + Duration::from_secs(1));
+        assert!(d.is_empty());
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn distance_equal_to_length_is_rejected() {
+        let mut p = presence();
+        let t0 = Instant::now();
+        p.connect(1, app("app-one"));
+        p.connect(2, app("app-two"));
+        p.join(1, join_msg("u-1", "A"), t0).unwrap();
+        p.subscribe(2, V, P).unwrap();
+        let t1 = t0 + Duration::from_secs(1);
+        let (d, errs) = p.update(1, vec![entry("u-1", 250.0)], t1);
+        assert!(d.is_empty());
+        assert_eq!(errs.len(), 1);
+        assert_eq!(errs[0].code, ErrorCode::InvalidValue);
+        assert_eq!(errs[0].rider.as_deref(), Some("u-1"));
+        let (d, errs) = p.update(1, vec![entry("u-1", 249.99)], t1);
+        assert!(errs.is_empty());
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn bad_entry_does_not_block_others() {
+        let mut p = presence();
+        let t0 = Instant::now();
+        p.connect(1, app("app-one"));
+        p.connect(2, app("app-two"));
+        p.join(1, join_msg("u-1", "A"), t0).unwrap();
+        p.subscribe(2, V, P).unwrap();
+        let (d, errs) = p.update(
+            1,
+            vec![entry("nope", 1.0), entry("u-1", 2.0)],
+            t0 + Duration::from_secs(1),
+        );
+        assert_eq!(errs.len(), 1);
+        assert_eq!(errs[0].code, ErrorCode::UnknownRider);
+        assert_eq!(errs[0].rider.as_deref(), Some("nope"));
+        assert_eq!(d.len(), 1);
+        assert_eq!(updated(&d[0]).len(), 1);
+    }
+
+    #[test]
+    fn rate_limit() {
+        let mut p = presence();
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        p.connect(1, app("app-one"));
+        p.connect(2, app("app-two"));
+        p.join(1, join_msg("u-1", "A"), t0 - ms(1000)).unwrap();
+        p.subscribe(2, V, P).unwrap();
+        let (d, errs) = p.update(1, vec![entry("u-1", 1.0)], t0);
+        assert!(errs.is_empty() && d.len() == 1);
+        let (d, errs) = p.update(1, vec![entry("u-1", 2.0)], t0 + ms(150));
+        assert!(d.is_empty());
+        assert_eq!(errs.len(), 1);
+        assert_eq!(errs[0].code, ErrorCode::RateLimited);
+        assert_eq!(errs[0].rider.as_deref(), Some("u-1"));
+        // The rejected entry did not move `last`: 200 ms after t0 is accepted.
+        let (d, errs) = p.update(1, vec![entry("u-1", 3.0)], t0 + ms(200));
+        assert!(errs.is_empty());
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn timeout_after_rider_timeout_s() {
+        let mut p = presence();
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        p.connect(1, app("app-one"));
+        p.connect(2, app("app-two"));
+        p.subscribe(2, V, P).unwrap();
+        p.join(1, join_msg("u-1", "A"), t0).unwrap();
+        assert!(p.expire(t0 + ms(9900)).is_empty());
+        let d = p.expire(t0 + ms(10_000));
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].to, 2);
+        assert!(matches!(&d[0].msg, ServerMsg::Left { id, reason: LeftReason::Timeout, .. } if id == "r1"));
+        // Gone: it cannot expire twice and its rider value is free again.
+        assert!(p.expire(t0 + ms(20_000)).is_empty());
+        p.join(1, join_msg("u-1", "A"), t0 + ms(20_000)).unwrap();
+
+        // An update at 5 s pushes the timeout to 15 s.
+        let t1 = t0 + ms(30_000);
+        p.join(1, join_msg("u-2", "B"), t1).unwrap();
+        let (_, errs) = p.update(1, vec![entry("u-2", 1.0)], t1 + ms(5000));
+        assert!(errs.is_empty());
+        assert!(p
+            .expire(t1 + ms(14_900))
+            .iter()
+            .all(|x| !matches!(&x.msg, ServerMsg::Left { id, .. } if id == "r3")));
+        let d = p.expire(t1 + ms(15_000));
+        assert!(d
+            .iter()
+            .any(|x| matches!(&x.msg, ServerMsg::Left { id, reason: LeftReason::Timeout, .. } if id == "r3")));
+    }
+
+    #[test]
+    fn optional_fields_only_when_sent() {
+        let mut p = presence();
+        let t0 = Instant::now();
+        p.connect(1, app("app-one"));
+        p.connect(2, app("app-two"));
+        p.join(1, join_msg("u-1", "A"), t0).unwrap();
+        p.subscribe(2, V, P).unwrap();
+        let mut e = entry("u-1", 1.0);
+        e.state.power = Some(200);
+        let t1 = t0 + Duration::from_secs(1);
+        let (d, _) = p.update(1, vec![e], t1);
+        assert_eq!(updated(&d[0])[0].state.power, Some(200));
+        let (d, _) = p.update(1, vec![entry("u-1", 2.0)], t1 + Duration::from_secs(1));
+        let u = &updated(&d[0])[0];
+        assert_eq!(u.state.power, None);
+        assert_eq!((u.state.cadence, u.state.heart_rate), (None, None));
     }
 }
