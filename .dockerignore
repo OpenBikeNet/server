@@ -1,0 +1,7 @@
+.git
+.github
+.env*
+**/target
+docs
+*.md
+*.sqlite

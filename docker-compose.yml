@@ -1,0 +1,80 @@
+# OpenBikeNet server
+#
+#   make up        build and start (http://localhost:8090)
+#   make update    git pull, rebuild, restart
+#
+# All settings come from .env (see .env.example). Docker Compose reads .env
+# automatically for the ${...} values below.
+
+name: openbikenet
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Exported by the Makefile (git commit and date); `dev` when built by hand.
+        OBN_BUILD_SHA: ${OBN_BUILD_SHA:-dev}
+        OBN_BUILD_DATE: ${OBN_BUILD_DATE:-}
+    image: obn-server:${OBN_IMAGE_TAG:-local}
+    restart: unless-stopped
+    environment:
+      OBN_TRUST_PROXY: ${OBN_TRUST_PROXY:-0}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      # Defaults to localhost only. Set OBN_HTTP_BIND=0.0.0.0 to expose it.
+      - "${OBN_HTTP_BIND:-127.0.0.1}:${OBN_HTTP_PORT:-8090}:8080"
+    networks:
+      default:
+      metrics:
+        aliases: [obn-server]
+    volumes:
+      # The routes are baked into the image from the pinned protocol submodule.
+      # Usage statistics (SQLite), so they survive `make update`. Back this volume up.
+      - data:/app/data
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional HTTPS for public servers without their own reverse proxy.
+  # Enable with COMPOSE_PROFILES=tls and OBN_DOMAIN in .env. Behind your own
+  # Caddy/nginx, leave it off.
+  caddy:
+    image: caddy:2-alpine@sha256:70b3180738b46cd88e49b300d790ae448a0aca3f58edef0f000bb57d619a9ab3
+    profiles: ["tls"]
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      OBN_DOMAIN: ${OBN_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  metrics:
+    name: openbikenet-metrics

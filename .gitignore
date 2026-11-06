@@ -1,0 +1,6 @@
+target/
+*.sqlite
+
+# Local configuration
+.env
+.env.dev
