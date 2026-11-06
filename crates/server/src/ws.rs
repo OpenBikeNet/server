@@ -18,7 +18,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tokio::time::Instant;
 
 use crate::config::Config;
@@ -40,17 +40,26 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// One bounded outgoing queue per connection.
+/// One bounded outgoing queue per connection, plus a signal that tells its reader to stop when
+/// the hub drops the connection.
 #[derive(Default)]
 pub struct Hub {
-    queues: Mutex<HashMap<ConnId, mpsc::Sender<ServerMsg>>>,
+    queues: Mutex<HashMap<ConnId, Queue>>,
 }
+
+/// The sender side of a connection's queue and its "dropped" signal.
+type Queue = (mpsc::Sender<ServerMsg>, Arc<Notify>);
 
 impl Hub {
     pub fn register(&self, conn: ConnId) -> mpsc::Receiver<ServerMsg> {
         let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
-        lock(&self.queues).insert(conn, tx);
+        lock(&self.queues).insert(conn, (tx, Arc::new(Notify::new())));
         rx
+    }
+
+    /// Notified when [`Hub::deliver`] drops the connection because its queue is full.
+    pub fn dropped_signal(&self, conn: ConnId) -> Option<Arc<Notify>> {
+        lock(&self.queues).get(&conn).map(|(_, n)| n.clone())
     }
 
     /// Dropping the sender lets the writer drain what is queued and then see the channel close.
@@ -69,11 +78,14 @@ impl Hub {
         }
         let mut queues = lock(&self.queues);
         for d in deliveries {
-            let Some(tx) = queues.get(&d.to) else { continue };
+            let Some((tx, dropped)) = queues.get(&d.to) else {
+                continue;
+            };
             match tx.try_send(d.msg) {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     tracing::warn!(conn = %conn_name(d.to), "outgoing queue full, closing connection");
+                    dropped.notify_one();
                     queues.remove(&d.to);
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -216,6 +228,7 @@ async fn ws_handler(
 async fn handle_socket(state: Arc<AppState>, socket: WebSocket, _ip_guard: IpGuard) {
     let conn = state.next_conn.fetch_add(1, Ordering::Relaxed);
     let rx = state.hub.register(conn);
+    let dropped = state.hub.dropped_signal(conn).expect("just registered");
     let (sink, mut stream) = socket.split();
     let close_code = Arc::new(AtomicU16::new(CLOSE_POLICY));
     let writer = tokio::spawn(write_loop(sink, rx, state.config.ping_interval, close_code.clone()));
@@ -226,7 +239,7 @@ async fn handle_socket(state: Arc<AppState>, socket: WebSocket, _ip_guard: IpGua
         app: None,
         recent_errors: VecDeque::new(),
     };
-    session.read_loop(&mut stream, &close_code).await;
+    session.read_loop(&mut stream, &close_code, &dropped).await;
 
     // Leave presence first (others get `left`), then close our queue; the writer drains it, sends
     // the close frame and ends. An unresponsive peer must not hold the task forever.
@@ -286,7 +299,12 @@ struct Session {
 }
 
 impl Session {
-    async fn read_loop(&mut self, stream: &mut futures_util::stream::SplitStream<WebSocket>, close_code: &AtomicU16) {
+    async fn read_loop(
+        &mut self,
+        stream: &mut futures_util::stream::SplitStream<WebSocket>,
+        close_code: &AtomicU16,
+        dropped: &Notify,
+    ) {
         let hello_timeout = self.state.config.hello_timeout;
         let pong_timeout = self.state.config.pong_timeout;
         let hello_deadline = Instant::now() + hello_timeout;
@@ -309,6 +327,8 @@ impl Session {
                     tracing::debug!(conn = %conn_name(self.conn), "pong timeout");
                     return;
                 }
+                // The hub dropped us (queue full): stop reading, so our riders leave now.
+                _ = dropped.notified() => return,
             };
             match frame {
                 None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
@@ -487,6 +507,7 @@ mod tests {
     fn full_queue_closes_connection() {
         let hub = Hub::default();
         let _rx = hub.register(1);
+        let dropped = hub.dropped_signal(1).unwrap();
         let msg = || Delivery {
             to: 1,
             msg: ServerMsg::Left {
@@ -502,6 +523,8 @@ mod tests {
         }
         hub.deliver(vec![msg()]);
         assert!(!hub.is_registered(1));
+        // The reader is told to stop (notify_one keeps the permit until someone waits).
+        assert!(futures_util::FutureExt::now_or_never(dropped.notified()).is_some());
         // Delivering to a connection that is gone is fine.
         hub.deliver(vec![msg()]);
     }
