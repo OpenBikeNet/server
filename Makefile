@@ -63,9 +63,9 @@ guard: # Ask before dropping riders: used by update, restart and down (FORCE=1 s
 	[ "$$n" -gt 0 ] || exit 0; \
 	where=$$(printf '%s\n' "$$out" | tail -n +2 | awk -F'\t' '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $$1, $$2 }'); \
 	napps=$$(printf '%s\n' "$$out" | tail -n +2 | grep -c .); \
-	if [ "$$n" -eq 1 ]; then who="1 rider from"; else who="$$n riders from"; fi; \
-	if [ "$$napps" -eq 1 ]; then from="1 app is"; else from="$$napps apps are"; fi; \
-	echo "$$who $$from on the server ($$where)."; \
+	if [ "$$n" -eq 1 ]; then who="1 rider"; verb=is; else who="$$n riders"; verb=are; fi; \
+	if [ "$$napps" -eq 1 ]; then from="1 app"; else from="$$napps apps"; fi; \
+	echo "$$who from $$from $$verb on the server ($$where)."; \
 	echo "This restarts it and drops them."; \
 	if [ ! -t 0 ]; then echo "No terminal to ask on: run with FORCE=1 to go ahead anyway."; exit 1; fi; \
 	read -r -p "Go ahead anyway? [y/N] " answer; \
