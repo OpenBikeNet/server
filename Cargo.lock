@@ -463,6 +463,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
 
 [[package]]
+name = "obn-fake-app"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "obn-server"
 version = "0.1.0"
 dependencies = [
