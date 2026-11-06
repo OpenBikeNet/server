@@ -29,3 +29,23 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    needs: [server]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+      - run: docker build -t obn-server:ci --build-arg OBN_BUILD_SHA=${{ github.sha }} .
+      - name: Smoke test
+        run: |
+          docker run -d --name obn -p 18080:8080 obn-server:ci
+          for i in $(seq 1 30); do
+            curl -fsS localhost:18080/healthz >/dev/null 2>&1 && break
+            if [ "$i" -eq 30 ]; then docker logs obn; echo "server did not become healthy"; exit 1; fi
+            sleep 1
+          done
+          test "$(curl -fsS localhost:18080/v0/stats)" = '{"apps":[]}'
+          docker stop obn

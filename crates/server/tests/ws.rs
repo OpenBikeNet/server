@@ -257,6 +257,59 @@ async fn per_ip_limit() {
     }
 }
 
+/// A raw HTTP GET: the status line and headers, then the body.
+async fn http_get(addr: SocketAddr, path: &str) -> (String, String) {
+    let mut tcp = TcpStream::connect(addr).await.unwrap();
+    tcp.write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut buf = Vec::new();
+    tokio::time::timeout(WAIT, tcp.read_to_end(&mut buf))
+        .await
+        .expect("timeout reading response")
+        .unwrap();
+    let text = String::from_utf8(buf).unwrap();
+    let (head, body) = text.split_once("\r\n\r\n").unwrap();
+    (head.to_string(), body.to_string())
+}
+
+#[tokio::test]
+async fn healthz() {
+    let addr = start(test_config()).await;
+    let (head, body) = http_get(addr, "/healthz").await;
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, "ok");
+}
+
+#[tokio::test]
+async fn metrics_endpoint() {
+    let addr = start(test_config()).await;
+    let mut b = app(addr, "openradlr").await;
+    send(&mut b, join_msg("u-1")).await;
+    // Barrier: the gauges come after the join was processed.
+    subscribe(&mut b).await;
+
+    let (head, body) = http_get(addr, "/internal/metrics").await;
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(
+        head.to_lowercase()
+            .contains("content-type: text/plain; version=0.0.4; charset=utf-8"),
+        "{head}"
+    );
+    assert!(body.contains("obn_riders{app=\"openradlr\"} 1\n"), "{body}");
+    assert!(body.contains("obn_connections{app=\"openradlr\"} 1\n"), "{body}");
+    assert!(body.contains("obn_connections_total 1\n"), "{body}");
+    assert!(body.contains("obn_errors_total{code=\"rate_limited\"} 0\n"), "{body}");
+    // Only aggregate counts: no rider names, rider IDs or IPs.
+    assert!(!body.contains("Anna") && !body.contains("u-1") && !body.contains("127.0.0.1"));
+
+    // An error that is sent shows up in its series.
+    send(&mut b, json!({"type":"nonsense"})).await;
+    assert_eq!(recv_json(&mut b).await["code"], "unknown_type");
+    let (_, body) = http_get(addr, "/internal/metrics").await;
+    assert!(body.contains("obn_errors_total{code=\"unknown_type\"} 1\n"), "{body}");
+}
+
 #[tokio::test]
 async fn stats_endpoint() {
     let addr = start(test_config()).await;

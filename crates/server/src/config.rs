@@ -37,7 +37,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// `OBN_BIND`, `OBN_ROUTES_DIR`, `OBN_DB` and `OBN_TRUST_PROXY=1`; everything else is fixed.
+    /// `OBN_BIND`, `OBN_ROUTES_DIR`, `OBN_DB` and `OBN_TRUST_PROXY=1` (or `true`); everything else is fixed.
     pub fn from_env() -> Result<Config, String> {
         let mut c = Config::default();
         if let Ok(v) = std::env::var("OBN_BIND") {
@@ -49,7 +49,27 @@ impl Config {
         if let Ok(v) = std::env::var("OBN_DB") {
             c.db_path = PathBuf::from(v);
         }
-        c.trust_proxy = std::env::var("OBN_TRUST_PROXY").is_ok_and(|v| v == "1");
+        c.trust_proxy = std::env::var("OBN_TRUST_PROXY").is_ok_and(|v| is_on(&v));
         Ok(c)
+    }
+}
+
+/// `1` or `true` switch a flag on; anything else, including an empty value, leaves it off.
+fn is_on(value: &str) -> bool {
+    matches!(value.trim(), "1" | "true")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_on;
+
+    #[test]
+    fn flags_accept_one_and_true() {
+        assert!(is_on("1"));
+        assert!(is_on("true"));
+        assert!(!is_on("0"));
+        assert!(!is_on("false"));
+        assert!(!is_on(""));
+        assert!(!is_on("yes"));
     }
 }

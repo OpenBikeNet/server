@@ -5,10 +5,20 @@ use obn_server::config::Config;
 use obn_server::metrics::Metrics;
 use obn_server::routes::Routes;
 use obn_server::ws::{router, spawn_tickers, AppState};
+use obn_server::{healthcheck, riders};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Subcommands for the container: `healthcheck` (Docker HEALTHCHECK) and `riders` (Makefile
+    // guard). They probe this server's own port, so they need no extra tools in the image.
+    match std::env::args().nth(1).as_deref() {
+        Some("healthcheck") => return probe(|addr| healthcheck::check(addr).then_some(String::new())),
+        Some("riders") => {
+            return probe(|addr| healthcheck::get(addr, "/v0/stats").and_then(|body| riders::summary(&body)))
+        }
+        _ => {}
+    }
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
@@ -18,6 +28,24 @@ async fn main() -> ExitCode {
             eprintln!("obn-server: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Runs a probe against the configured bind address and prints what it returns.
+fn probe(f: impl FnOnce(SocketAddr) -> Option<String>) -> ExitCode {
+    let config = match Config::from_env() {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("configuration error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match f(healthcheck::probe_addr(config.bind)) {
+        Some(out) => {
+            print!("{out}");
+            ExitCode::SUCCESS
+        }
+        None => ExitCode::FAILURE,
     }
 }
 

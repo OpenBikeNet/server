@@ -36,6 +36,24 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
+    /// Every code, in declaration order (so `code as usize` indexes it).
+    pub const ALL: [ErrorCode; 14] = [
+        ErrorCode::HelloRequired,
+        ErrorCode::HelloRepeated,
+        ErrorCode::InvalidMessage,
+        ErrorCode::UnknownType,
+        ErrorCode::InvalidAppId,
+        ErrorCode::UnknownRoute,
+        ErrorCode::InvalidRoom,
+        ErrorCode::RiderExists,
+        ErrorCode::UnknownRider,
+        ErrorCode::InvalidValue,
+        ErrorCode::RateLimited,
+        ErrorCode::LimitExceeded,
+        ErrorCode::MessageTooLarge,
+        ErrorCode::TooManyErrors,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             ErrorCode::HelloRequired => "hello_required",

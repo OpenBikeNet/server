@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -24,6 +24,7 @@ use tokio::time::Instant;
 use crate::config::Config;
 use crate::metrics::{today_utc, Metrics};
 use crate::presence::{ConnId, Delivery, Presence};
+use crate::prometheus::{render, Counters, CONTENT_TYPE};
 use crate::protocol::{parse_app_msg, parse_update_entry, AppInfo, AppMsg, ErrorCode, ProtoError, ServerMsg};
 use crate::routes::Routes;
 
@@ -45,12 +46,21 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Default)]
 pub struct Hub {
     queues: Mutex<HashMap<ConnId, Queue>>,
+    counters: Arc<Counters>,
 }
 
 /// The sender side of a connection's queue and its "dropped" signal.
 type Queue = (mpsc::Sender<ServerMsg>, Arc<Notify>);
 
 impl Hub {
+    /// A hub that counts its queue-full drops in `counters`.
+    pub fn new(counters: Arc<Counters>) -> Hub {
+        Hub {
+            queues: Mutex::default(),
+            counters,
+        }
+    }
+
     pub fn register(&self, conn: ConnId) -> mpsc::Receiver<ServerMsg> {
         let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
         lock(&self.queues).insert(conn, (tx, Arc::new(Notify::new())));
@@ -85,6 +95,7 @@ impl Hub {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     tracing::warn!(conn = %conn_name(d.to), "outgoing queue full, closing connection");
+                    self.counters.queue_full_drop();
                     dropped.notify_one();
                     queues.remove(&d.to);
                 }
@@ -101,6 +112,8 @@ pub struct AppState {
     pub presence: Mutex<Presence>,
     pub hub: Hub,
     pub metrics: Mutex<Metrics>,
+    /// Counters for `/internal/metrics`, shared with the hub.
+    pub counters: Arc<Counters>,
     pub ip_counts: Mutex<HashMap<IpAddr, u32>>,
     /// The next connection number; connection IDs are `c` + its hex.
     pub next_conn: AtomicU64,
@@ -109,11 +122,13 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config, routes: Routes, metrics: Metrics) -> Arc<AppState> {
         let presence = Presence::new(routes, config.limits);
+        let counters = Arc::new(Counters::default());
         Arc::new(AppState {
             config,
             presence: Mutex::new(presence),
-            hub: Hub::default(),
+            hub: Hub::new(counters.clone()),
             metrics: Mutex::new(metrics),
+            counters,
             ip_counts: Mutex::new(HashMap::new()),
             next_conn: AtomicU64::new(1),
         })
@@ -153,7 +168,23 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v0", get(ws_handler))
         .route("/v0/stats", get(stats_handler))
+        .route("/healthz", get(healthz))
+        .route("/internal/metrics", get(metrics_handler))
         .with_state(state)
+}
+
+async fn healthz() -> &'static str {
+    "ok"
+}
+
+// This endpoint is intended for the host's private Prometheus network. It only exports aggregate
+// counts per app ID (already public via /v0/stats) and server counters; never rider names, rider
+// values, IPs or request details.
+async fn metrics_handler(State(state): State<Arc<AppState>>) -> ([(header::HeaderName, &'static str); 1], String) {
+    let live = lock(&state.presence).live_counts();
+    let sha = std::env::var("OBN_BUILD_SHA").unwrap_or_else(|_| "dev".to_string());
+    let body = render(&live, &state.counters.snapshot(), env!("CARGO_PKG_VERSION"), &sha);
+    ([(header::CONTENT_TYPE, CONTENT_TYPE)], body)
 }
 
 async fn stats_handler(State(state): State<Arc<AppState>>) -> Response {
@@ -212,6 +243,7 @@ async fn ws_handler(
         let mut counts = lock(&state.ip_counts);
         let n = counts.entry(ip).or_insert(0);
         if *n >= state.config.max_connections_per_ip {
+            state.counters.rejected_per_ip();
             return StatusCode::TOO_MANY_REQUESTS.into_response();
         }
         *n += 1;
@@ -227,6 +259,7 @@ async fn ws_handler(
 
 async fn handle_socket(state: Arc<AppState>, socket: WebSocket, _ip_guard: IpGuard) {
     let conn = state.next_conn.fetch_add(1, Ordering::Relaxed);
+    state.counters.connection_accepted();
     let rx = state.hub.register(conn);
     let dropped = state.hub.dropped_signal(conn).expect("just registered");
     let (sink, mut stream) = socket.split();
@@ -354,6 +387,7 @@ impl Session {
 
     /// Sends a fatal error and unregisters, so the writer flushes it and then closes the socket.
     fn fatal(&self, err: ProtoError) {
+        self.state.counters.error_sent(err.code);
         self.send_self(err.into());
         self.state.hub.unregister(self.conn);
     }
@@ -379,6 +413,7 @@ impl Session {
             self.fatal(ProtoError::new(ErrorCode::TooManyErrors, "too many errors").with_ref(ref_.clone()));
             return Flow::Close;
         }
+        self.state.counters.error_sent(err.code);
         self.send_self(err.into());
         Flow::Continue
     }
@@ -486,7 +521,12 @@ impl Session {
                 Err(e) => errors.push(e),
             }
         }
+        let entries_in = valid.len();
         let (deliveries, more) = lock(&self.state.presence).update(self.conn, valid, now);
+        // Each rejected entry yields exactly one error.
+        self.state
+            .counters
+            .updates_accepted(entries_in.saturating_sub(more.len()));
         self.state.hub.deliver(deliveries);
         errors.extend(more);
         for e in errors {

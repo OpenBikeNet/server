@@ -1,0 +1,23 @@
+# HTTPS reverse proxy for public OpenBikeNet servers.
+# Caddy fetches and renews certificates automatically and proxies WebSockets.
+
+{$OBN_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+
+	# Metrics are for the private Prometheus network only (see the README).
+	# Using your own reverse proxy instead? Block /internal/* there too, and
+	# set OBN_TRUST_PROXY=1 so the per-IP limit sees the real client address.
+	handle /internal/* {
+		respond 404
+	}
+
+	handle {
+		reverse_proxy server:8080
+	}
+}
