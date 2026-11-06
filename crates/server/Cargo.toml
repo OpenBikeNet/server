@@ -23,8 +23,9 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 time = "0.3"
 axum = { version = "0.8", features = ["ws"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "sync", "signal"] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.29"

@@ -10,7 +10,7 @@ use obn_server::config::Config;
 use obn_server::metrics::Metrics;
 use obn_server::protocol::Limits;
 use obn_server::routes::Routes;
-use obn_server::ws::{router, AppState};
+use obn_server::ws::{router, spawn_tickers, AppState};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -38,6 +38,7 @@ async fn start(config: Config) -> SocketAddr {
     let state = AppState::new(config, routes, Metrics::open_in_memory().unwrap());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    spawn_tickers(state.clone());
     tokio::spawn(async move {
         axum::serve(
             listener,
@@ -62,8 +63,12 @@ async fn send(c: &mut Client, v: Value) {
 }
 
 async fn recv_json(c: &mut Client) -> Value {
+    recv_json_within(c, WAIT).await
+}
+
+async fn recv_json_within(c: &mut Client, wait: Duration) -> Value {
     loop {
-        match tokio::time::timeout(WAIT, c.next()).await {
+        match tokio::time::timeout(wait, c.next()).await {
             Err(_) => panic!("timed out waiting for a message"),
             Ok(None) => panic!("stream ended while waiting for a message"),
             Ok(Some(Err(e))) => panic!("socket error while waiting for a message: {e}"),
@@ -283,4 +288,22 @@ async fn stats_endpoint() {
     assert_eq!(app["id"], "openradlr");
     assert_eq!(app["connections"], 1);
     assert_eq!(app["riders"], 1);
+}
+
+#[tokio::test]
+async fn ticker_expires_riders() {
+    let mut config = test_config();
+    config.limits.rider_timeout_s = 1;
+    let addr = start(config).await;
+    let mut a = app(addr, "app-a").await;
+    subscribe(&mut a).await;
+    let mut b = app(addr, "app-b").await;
+    send(&mut b, join_msg("u-1")).await;
+    let j = recv_json(&mut a).await;
+    assert_eq!(j["type"], "joined");
+    // B sends nothing more; the ticker must expire it.
+    let l = recv_json_within(&mut a, Duration::from_secs(3)).await;
+    assert_eq!(l["type"], "left");
+    assert_eq!(l["reason"], "timeout");
+    assert_eq!(l["id"], "r1");
 }

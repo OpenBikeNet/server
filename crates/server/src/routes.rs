@@ -71,6 +71,11 @@ impl Routes {
     pub fn get(&self, id: &str) -> Option<&Route> {
         self.by_id.get(id)
     }
+
+    /// The loaded route IDs, sorted.
+    pub fn ids(&self) -> impl Iterator<Item = &str> {
+        self.by_id.keys().map(String::as_str)
+    }
 }
 
 /// Checks one route against the profile rules of spec 4.1.

@@ -112,6 +112,31 @@ fn conn_name(conn: ConnId) -> String {
     format!("c{conn:x}")
 }
 
+/// Background tasks: expire silent riders every second and record rider-minutes every minute.
+/// The std mutexes are locked, used and released before anything is awaited.
+pub fn spawn_tickers(state: Arc<AppState>) {
+    let expiry = state.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            tick.tick().await;
+            let deliveries = lock(&expiry.presence).expire(std::time::Instant::now());
+            expiry.hub.deliver(deliveries);
+        }
+    });
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        tick.tick().await; // the first tick is immediate; counting starts after a full minute
+        loop {
+            tick.tick().await;
+            let live = lock(&state.presence).live_counts();
+            if let Err(e) = lock(&state.metrics).add_minute(&live, &today_utc()) {
+                tracing::warn!("metrics write failed: {e}");
+            }
+        }
+    });
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v0", get(ws_handler))
