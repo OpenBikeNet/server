@@ -30,8 +30,8 @@ One binary in a Cargo workspace. Each module has one job:
 has no async code and no clock of its own (the time is passed in), so timeouts are tested without
 waiting.
 
-Fan-out: each room has a `tokio::sync::broadcast` channel. A connection task subscribes to the
-rooms its app watches and drops events for its own riders.
+Fan-out: `presence` returns the messages addressed to each connection, and the `ws` hub sends
+them.
 
 ## Testing
 
