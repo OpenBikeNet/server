@@ -9,6 +9,11 @@ the same route. See the [organisation profile](https://github.com/OpenBikeNet) f
 The protocol is designed in the [protocol repository](https://github.com/OpenBikeNet/protocol).
 Ideas and feedback are welcome in its Discussions.
 
+## Public server
+
+A public instance runs at [openbikenet.cloud](https://openbikenet.cloud). Apps connect to
+`wss://openbikenet.cloud/v0`, and `https://openbikenet.cloud/v0/stats` shows which apps are on.
+
 ## Running it
 
 With Docker (nothing else needed):
