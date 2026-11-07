@@ -100,7 +100,7 @@ fn server_messages_match_examples() {
     check(
         "welcome.json",
         ServerMsg::Welcome {
-            protocol: "0.1",
+            protocol: "0.2",
             connection: "c9Qe4".into(),
             limits: Limits::default(),
         },
@@ -149,6 +149,12 @@ fn server_messages_match_examples() {
             ref_: Some("42".into()),
             rider: Some("u-1842".into()),
             fatal: false,
+        },
+    );
+    check(
+        "pong.json",
+        ServerMsg::Pong {
+            ref_: Some("hb-17".into()),
         },
     );
 }

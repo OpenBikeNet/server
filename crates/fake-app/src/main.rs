@@ -111,8 +111,8 @@ async fn run(args: Args) -> Result<(), String> {
 
     let mut bots: Vec<Bot> = (0..args.riders)
         .map(|i| Bot {
-            id: format!("bot-{}", i + 1),
-            name: format!("Bot {}", i + 1),
+            id: format!("fake-{}", i + 1),
+            name: format!("Fake {}", i + 1),
             lap: 0,
             distance: args.length * f64::from(i) / f64::from(args.riders),
         })

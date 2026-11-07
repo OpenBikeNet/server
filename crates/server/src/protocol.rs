@@ -8,6 +8,8 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 pub const DEFAULT_ROOM: &str = "public";
+/// The minor version of v0 this server implements, sent in `welcome`.
+pub const PROTOCOL_VERSION: &str = "0.2";
 
 const MAX_REF: usize = 64;
 const MAX_RIDER: usize = 64;
@@ -172,6 +174,7 @@ pub enum AppMsg {
     Leave {
         rider: String,
     },
+    Ping,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -262,6 +265,10 @@ pub enum ServerMsg {
         #[serde(skip_serializing_if = "Option::is_none")]
         rider: Option<String>,
         fatal: bool,
+    },
+    Pong {
+        #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+        ref_: Option<String>,
     },
 }
 
@@ -360,6 +367,7 @@ fn parse_body(obj: &Map<String, Value>) -> Result<AppMsg, ProtoError> {
         "leave" => Ok(AppMsg::Leave {
             rider: rider_field(obj)?,
         }),
+        "ping" => Ok(AppMsg::Ping),
         other => Err(ProtoError::new(
             ErrorCode::UnknownType,
             format!("unknown type {:?}", truncate(other)),
@@ -458,10 +466,51 @@ fn name_field(obj: &Map<String, Value>) -> Result<String, ProtoError> {
     if len == 0 || len > MAX_NAME {
         return Err(invalid_value("name must be 1 to 32 characters"));
     }
-    if name.chars().any(char::is_control) {
-        return Err(invalid_value("name must not contain control characters"));
+    if name.chars().any(is_forbidden_in_name) {
+        return Err(invalid_value(
+            "name must not contain control, format, private-use or separator characters",
+        ));
+    }
+    if name.chars().all(char::is_whitespace) {
+        return Err(invalid_value("name must not be only whitespace"));
     }
     Ok(name.to_string())
+}
+
+/// Unicode general categories Cc, Cf, Co, Zl and Zp (Unicode 15.0), except U+200D ZERO WIDTH
+/// JOINER, which emoji sequences need (spec 6.3.1). The same ranges as the `name` pattern in the
+/// message schemas.
+fn is_forbidden_in_name(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x0000..=0x001F
+            | 0x007F..=0x009F
+            | 0x00AD
+            | 0x0600..=0x0605
+            | 0x061C
+            | 0x06DD
+            | 0x070F
+            | 0x0890..=0x0891
+            | 0x08E2
+            | 0x180E
+            | 0x200B..=0x200C
+            | 0x200E..=0x200F
+            | 0x2028..=0x202E
+            | 0x2060..=0x2064
+            | 0x2066..=0x206F
+            | 0xE000..=0xF8FF
+            | 0xFEFF
+            | 0xFFF9..=0xFFFB
+            | 0x110BD
+            | 0x110CD
+            | 0x13430..=0x1343F
+            | 0x1BCA0..=0x1BCA3
+            | 0x1D173..=0x1D17A
+            | 0xE0001
+            | 0xE0020..=0xE007F
+            | 0xF0000..=0xFFFFD
+            | 0x100000..=0x10FFFD
+    )
 }
 
 /// A number that must be a whole number within `min..=max`. A non-number is `invalid_message`,
