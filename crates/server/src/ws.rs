@@ -1,4 +1,4 @@
-//! WebSocket endpoint `/v0` and the stats endpoint `/v0/stats`.
+//! WebSocket endpoint `/v0`, the stats endpoint `/v0/stats` and the landing page at `/`.
 //!
 //! `presence` is pure and returns addressed deliveries; the [`Hub`] holds one bounded queue per
 //! connection and sends them. A connection whose queue is full is dropped, so a slow reader can
@@ -7,13 +7,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use futures_util::stream::SplitSink;
@@ -168,11 +168,20 @@ pub fn spawn_tickers(state: Arc<AppState>) {
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/", get(landing))
         .route("/v0", get(ws_handler))
         .route("/v0/stats", get(stats_handler))
         .route("/healthz", get(healthz))
         .route("/internal/metrics", get(metrics_handler))
         .with_state(state)
+}
+
+/// A static page for people who open the server's address in a browser.
+static LANDING: LazyLock<String> =
+    LazyLock::new(|| include_str!("landing.html").replace("{{VERSION}}", env!("CARGO_PKG_VERSION")));
+
+async fn landing() -> Html<&'static str> {
+    Html(LANDING.as_str())
 }
 
 async fn healthz() -> &'static str {

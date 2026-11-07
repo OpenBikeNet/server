@@ -388,3 +388,14 @@ async fn ticker_expires_riders() {
     assert_eq!(l["reason"], "timeout");
     assert_eq!(l["id"], "r1");
 }
+
+#[tokio::test]
+async fn landing_page() {
+    let addr = start(test_config()).await;
+    let (head, body) = http_get(addr, "/").await;
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(head.to_lowercase().contains("content-type: text/html"), "{head}");
+    assert!(body.contains("/v0/stats"), "{body}");
+    assert!(body.contains("https://github.com/OpenBikeNet"), "{body}");
+    assert!(body.contains(env!("CARGO_PKG_VERSION")), "{body}");
+}

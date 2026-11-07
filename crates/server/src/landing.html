@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenBikeNet server</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f6f3; --fg: #1d1d1b; --dim: #6b6b66; --line: #d9d9d3; --accent: #1f7a4d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121312; --fg: #e4e4df; --dim: #8d8d86; --line: #2c2d2b; --accent: #5fd08f; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  main { max-width: 44rem; margin: 0 auto; padding: 4rem 1.5rem 3rem; }
+  h1 { font-size: 1.1rem; margin: 0 0 1.5rem; font-weight: 600; }
+  h1 .dot { color: var(--accent); }
+  h2 { font-size: 0.8rem; font-weight: 600; color: var(--dim); text-transform: uppercase;
+       letter-spacing: 0.08em; margin: 2.5rem 0 0.75rem; }
+  p { margin: 0 0 1rem; }
+  .dim { color: var(--dim); }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 0.45rem 0; border-top: 1px solid var(--line); vertical-align: top; }
+  td:first-child { white-space: nowrap; padding-right: 1.5rem; }
+  .method { color: var(--dim); display: inline-block; width: 3.5em; }
+  code { font: inherit; color: var(--fg); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { padding: 0.2rem 0; }
+  li::before { content: "→ "; color: var(--dim); }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
+           color: var(--dim); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span class="dot">●</span> OpenBikeNet server</h1>
+  <p>A neutral relay that lets riders of different indoor cycling apps meet on the same route.</p>
+  <p class="dim">This is a backend for apps. There is nothing to use here in a browser.</p>
+
+  <h2>Endpoints</h2>
+  <table>
+    <tr><td><span class="method">WS</span>/v0</td><td>Protocol v0: presence on shared routes</td></tr>
+    <tr><td><span class="method">GET</span>/v0/stats</td><td>Connected apps, riders and usage per app</td></tr>
+    <tr><td><span class="method">GET</span>/healthz</td><td>Liveness check</td></tr>
+  </table>
+
+  <h2>Links</h2>
+  <ul>
+    <li><a href="https://openbikenet.cloud">openbikenet.cloud</a> <span class="dim">· the public server</span></li>
+    <li><a href="https://github.com/OpenBikeNet">github.com/OpenBikeNet</a></li>
+    <li><a href="https://github.com/OpenBikeNet/protocol/blob/main/spec/v0.md">Protocol specification</a></li>
+    <li><a href="https://github.com/OpenBikeNet/server">Server source</a> <span class="dim">· run your own with <code>make up</code></span></li>
+    <li><a href="https://github.com/OpenBikeNet/protocol/discussions">Discussions</a> <span class="dim">· building an app? say hello</span></li>
+  </ul>
+
+  <footer>obn-server {{VERSION}} · AGPL-3.0</footer>
+</main>
+</body>
+</html>
