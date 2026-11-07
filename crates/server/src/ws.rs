@@ -25,7 +25,9 @@ use crate::config::Config;
 use crate::metrics::{today_utc, Metrics};
 use crate::presence::{ConnId, Delivery, Presence};
 use crate::prometheus::{render, Counters, CONTENT_TYPE};
-use crate::protocol::{parse_app_msg, parse_update_entry, AppInfo, AppMsg, ErrorCode, ProtoError, ServerMsg};
+use crate::protocol::{
+    parse_app_msg, parse_update_entry, AppInfo, AppMsg, ErrorCode, ProtoError, ServerMsg, PROTOCOL_VERSION,
+};
 use crate::routes::Routes;
 
 const QUEUE_CAPACITY: usize = 1024;
@@ -393,25 +395,28 @@ impl Session {
     }
 
     /// Sends the error to this connection. Returns `Close` if it was fatal, or if it pushed the
-    /// connection over the error rate (more than 20 non-fatal errors within 10 s).
+    /// connection over the error rate (more than 20 non-fatal errors within 10 s). `rate_limited`
+    /// does not count: it is a pacing hint, and a backend with many riders can get one per rider.
     fn report(&mut self, err: ProtoError, ref_: &Option<String>) -> Flow {
         let err = err.with_ref(ref_.clone());
         if err.code.fatal() {
             self.fatal(err);
             return Flow::Close;
         }
-        let now = Instant::now();
-        self.recent_errors.push_back(now);
-        while self
-            .recent_errors
-            .front()
-            .is_some_and(|t| now.duration_since(*t) > ERROR_WINDOW)
-        {
-            self.recent_errors.pop_front();
-        }
-        if self.recent_errors.len() > MAX_ERRORS_IN_WINDOW {
-            self.fatal(ProtoError::new(ErrorCode::TooManyErrors, "too many errors").with_ref(ref_.clone()));
-            return Flow::Close;
+        if err.code != ErrorCode::RateLimited {
+            let now = Instant::now();
+            self.recent_errors.push_back(now);
+            while self
+                .recent_errors
+                .front()
+                .is_some_and(|t| now.duration_since(*t) > ERROR_WINDOW)
+            {
+                self.recent_errors.pop_front();
+            }
+            if self.recent_errors.len() > MAX_ERRORS_IN_WINDOW {
+                self.fatal(ProtoError::new(ErrorCode::TooManyErrors, "too many errors").with_ref(ref_.clone()));
+                return Flow::Close;
+            }
         }
         self.state.counters.error_sent(err.code);
         self.send_self(err.into());
@@ -481,7 +486,7 @@ impl Session {
         self.app = Some(info.id.clone());
         lock(&state.presence).connect(self.conn, info);
         self.send_self(ServerMsg::Welcome {
-            protocol: "0.1",
+            protocol: PROTOCOL_VERSION,
             connection: conn_name(self.conn),
             limits: state.config.limits,
         });
@@ -502,6 +507,10 @@ impl Session {
             AppMsg::Join(join) => lock(&state.presence).join(conn, join, now),
             AppMsg::Leave { rider } => lock(&state.presence).leave(conn, &rider),
             AppMsg::Update(entries) => return self.update(entries, ref_, now),
+            AppMsg::Ping => {
+                self.send_self(ServerMsg::Pong { ref_ });
+                return Flow::Continue;
+            }
         };
         match result {
             Ok(deliveries) => {

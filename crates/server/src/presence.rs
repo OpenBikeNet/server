@@ -36,8 +36,10 @@ struct Rider {
     room: String,
     name: String,
     state: RiderState,
-    /// When the last state was accepted.
+    /// When the last state was accepted, by `join` or `update`. Drives the timeout.
     last: Instant,
+    /// When the last `update` was accepted. Drives the rate limit; a join does not count (spec 6.3).
+    last_update: Option<Instant>,
 }
 
 #[derive(Debug)]
@@ -156,6 +158,7 @@ impl Presence {
             name: join.name,
             state: join.state,
             last: now,
+            last_update: None,
         };
         self.next_rider += 1;
         let joined = view(&c.app, &rider);
@@ -207,11 +210,14 @@ impl Presence {
                         continue;
                     }
                 }
-                if now.saturating_duration_since(r.last) < min_interval {
+                if r.last_update
+                    .is_some_and(|t| now.saturating_duration_since(t) < min_interval)
+                {
                     errors.push(fail(ErrorCode::RateLimited, "updates are coming too fast".to_string()));
                     continue;
                 }
                 r.last = now;
+                r.last_update = Some(now);
                 r.state = e.state.clone();
                 accepted
                     .entry((r.route.clone(), r.room.clone()))
@@ -739,6 +745,19 @@ mod tests {
         // The rejected entry did not move `last`: 200 ms after t0 is accepted.
         let (d, errs) = p.update(1, vec![entry("u-1", 3.0)], t0 + ms(200));
         assert!(errs.is_empty());
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn update_right_after_join_is_accepted() {
+        let mut p = presence();
+        let t0 = Instant::now();
+        p.connect(1, app("app-one"));
+        p.connect(2, app("app-two"));
+        p.subscribe(2, V, P).unwrap();
+        p.join(1, join_msg("u-1", "A"), t0).unwrap();
+        let (d, errs) = p.update(1, vec![entry("u-1", 1.0)], t0);
+        assert!(errs.is_empty(), "{errs:?}");
         assert_eq!(d.len(), 1);
     }
 

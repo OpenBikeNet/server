@@ -147,7 +147,7 @@ async fn welcome_has_limits() {
     send(&mut c, json!({"type":"hello","app":{"id":"app-a","version":"1.0"}})).await;
     let w = recv_json(&mut c).await;
     assert_eq!(w["type"], "welcome");
-    assert_eq!(w["protocol"], "0.1");
+    assert_eq!(w["protocol"], "0.2");
     assert_eq!(w["connection"], "c1");
     assert_eq!(w["limits"], serde_json::to_value(Limits::default()).unwrap());
 }
@@ -220,6 +220,34 @@ async fn error_carries_ref() {
     assert_eq!(e["code"], "unknown_rider");
     assert_eq!(e["ref"], "9");
     assert_eq!(e["fatal"], false);
+}
+
+#[tokio::test]
+async fn ping_gets_pong() {
+    let addr = start(test_config()).await;
+    let mut c = app(addr, "app-a").await;
+    send(&mut c, json!({"type":"ping","ref":"hb-1"})).await;
+    assert_eq!(recv_json(&mut c).await, json!({"type":"pong","ref":"hb-1"}));
+    send(&mut c, json!({"type":"ping"})).await;
+    assert_eq!(recv_json(&mut c).await, json!({"type":"pong"}));
+}
+
+#[tokio::test]
+async fn rate_limited_does_not_count_towards_too_many_errors() {
+    let mut config = test_config();
+    config.limits.max_update_hz = 1;
+    let addr = start(config).await;
+    let mut c = app(addr, "app-a").await;
+    send(&mut c, join_msg("u-1")).await;
+    // Far more than the 20 errors in 10 s that close a connection.
+    let entry = json!({"rider":"u-1","lap":0,"distance":1,"speed":1});
+    send(&mut c, json!({"type":"update","riders":vec![entry; 30]})).await;
+    for _ in 0..29 {
+        let e = recv_json(&mut c).await;
+        assert_eq!(e["code"], "rate_limited", "{e}");
+    }
+    // Still open.
+    subscribe(&mut c).await;
 }
 
 #[tokio::test]
