@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy · OpenBikeNet server</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f6f3; --fg: #1d1d1b; --dim: #6b6b66; --line: #d9d9d3; --accent: #1f7a4d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121312; --fg: #e4e4df; --dim: #8d8d86; --line: #2c2d2b; --accent: #5fd08f; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  main { max-width: 44rem; margin: 0 auto; padding: 4rem 1.5rem 3rem; }
+  h1 { font-size: 1.1rem; margin: 0 0 1.5rem; font-weight: 600; }
+  h2 { font-size: 0.8rem; font-weight: 600; color: var(--dim); text-transform: uppercase;
+       letter-spacing: 0.08em; margin: 2.5rem 0 0.75rem; }
+  p { margin: 0 0 1rem; }
+  .dim { color: var(--dim); }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { padding: 0.2rem 0 0.2rem 1.2rem; text-indent: -1.2rem; }
+  li::before { content: "→ "; color: var(--dim); }
+  code { font: inherit; color: var(--fg); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
+           color: var(--dim); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1><a href="/">OpenBikeNet server</a> · Privacy</h1>
+  <p>OpenBikeNet is a relay for shared presence. This page describes what the public server at
+    <a href="https://openbikenet.cloud">openbikenet.cloud</a> stores. If you run your own server,
+    you decide what it stores.</p>
+
+  <h2>What is stored</h2>
+  <ul>
+    <li>The app ID and versions that connect, and the dates each app was first and last seen.</li>
+    <li>How many riders each app had, per minute. The public statistics at
+      <a href="/v0/stats">/v0/stats</a> show the last 30 days.</li>
+  </ul>
+  <p>That is all. The counts are what makes the public usage statistics possible.</p>
+
+  <h2>What is not stored</h2>
+  <ul>
+    <li>Rider names, rider values, positions, speed, power, cadence or heart rate. They are
+      passed on to the other connections and kept only in memory while a rider is connected.</li>
+    <li>IP addresses. They are used only to limit connections per address and are never written
+      to disk.</li>
+    <li>Cookies or analytics. This page and the landing page have neither.</li>
+  </ul>
+
+  <h2>How long it is kept</h2>
+  <p>Per-app rider counts are stored per day. The public statistics only read the last 30 days.
+    There is no rider history to delete, because none is kept.</p>
+
+  <h2>Questions</h2>
+  <p>Ask in the <a href="https://github.com/OpenBikeNet/protocol/discussions">discussions</a>,
+    or open an issue in the <a href="https://github.com/OpenBikeNet/server">server repository</a>.</p>
+
+  <footer>obn-server {{VERSION}} · AGPL-3.0</footer>
+</main>
+</body>
+</html>

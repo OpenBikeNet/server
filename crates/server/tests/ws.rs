@@ -398,4 +398,18 @@ async fn landing_page() {
     assert!(body.contains("/v0/stats"), "{body}");
     assert!(body.contains("https://github.com/OpenBikeNet"), "{body}");
     assert!(body.contains(env!("CARGO_PKG_VERSION")), "{body}");
+    assert!(body.contains("velodrome-250"), "{body}");
+    assert!(body.contains("herne-hill-450"), "{body}");
+    assert!(body.contains("/privacy"), "{body}");
+}
+
+#[tokio::test]
+async fn privacy_page() {
+    let addr = start(test_config()).await;
+    let (head, body) = http_get(addr, "/privacy").await;
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(head.to_lowercase().contains("content-type: text/html"), "{head}");
+    assert!(body.contains("IP addresses"), "{body}");
+    assert!(body.contains("Rider names"), "{body}");
+    assert!(body.contains(env!("CARGO_PKG_VERSION")), "{body}");
 }
