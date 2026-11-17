@@ -76,6 +76,11 @@ impl Routes {
     pub fn ids(&self) -> impl Iterator<Item = &str> {
         self.by_id.keys().map(String::as_str)
     }
+
+    /// Every route, sorted by ID.
+    pub fn list(&self) -> impl Iterator<Item = &Route> {
+        self.by_id.values()
+    }
 }
 
 /// Checks one route against the profile rules of spec 4.1.

@@ -44,6 +44,16 @@
   <p>A neutral relay that lets riders of different indoor cycling apps meet on the same route.</p>
   <p class="dim">This is a backend for apps. There is nothing to use here in a browser.</p>
 
+  <h2>Live</h2>
+  <p id="live">Loading the live numbers…</p>
+  <p id="history" class="dim"></p>
+  <noscript><p class="dim">The live numbers need JavaScript. The raw numbers are at <a href="/v0/stats">/v0/stats</a>.</p></noscript>
+
+  <h2>Shared routes</h2>
+  <table>
+    {{ROUTES}}
+  </table>
+
   <h2>Endpoints</h2>
   <table>
     <tr><td><span class="method">WS</span>/v0</td><td>Protocol v0: presence on shared routes</td></tr>
@@ -62,6 +72,14 @@
     </tr>
   </table>
 
+  <section id="usage" hidden>
+    <h2>Usage</h2>
+    <table>
+      <thead><tr><td>App</td><td>Versions</td><td>Riders / connections</td><td>Last 30 days</td><td>Last seen</td></tr></thead>
+      <tbody id="usage-rows"></tbody>
+    </table>
+  </section>
+
   <h2>Links</h2>
   <ul>
     <li><a href="https://openbikenet.cloud">openbikenet.cloud</a> <span class="dim">· the public server</span></li>
@@ -69,9 +87,54 @@
     <li><a href="https://github.com/OpenBikeNet/protocol/blob/main/spec/v0.md">Protocol specification</a></li>
     <li><a href="https://github.com/OpenBikeNet/server">Server source</a> <span class="dim">· run your own with <code>make up</code></span></li>
     <li><a href="https://github.com/OpenBikeNet/protocol/discussions">Discussions</a> <span class="dim">· building an app? say hello</span></li>
+    <li><a href="/privacy">Privacy</a> <span class="dim">· what this server stores</span></li>
   </ul>
 
   <footer>obn-server {{VERSION}} · AGPL-3.0</footer>
 </main>
+<script>
+(() => {
+  const set = (id, value) => {
+    document.getElementById(id).textContent = value;
+  };
+  fetch('/v0/stats', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then(({ apps }) => {
+      const shown = apps.filter((a) => a.connections > 0 || a.riders > 0 || a.rider_minutes_30d > 0);
+      const riders = shown.reduce((n, a) => n + a.riders, 0);
+      const connected = shown.filter((a) => a.connections > 0).length;
+      set(
+        'live',
+        riders > 0
+          ? `${riders} rider${riders === 1 ? '' : 's'} from ${connected} app${connected === 1 ? '' : 's'} on the shared routes right now.`
+          : connected > 0
+            ? `${connected} app${connected === 1 ? '' : 's'} connected; no riders on the routes right now.`
+            : 'No riders online right now.'
+      );
+      const minutes = shown.reduce((n, a) => n + a.rider_minutes_30d, 0);
+      const riding = shown.filter((a) => a.rider_minutes_30d > 0).length;
+      set(
+        'history',
+        minutes > 0
+          ? `${minutes} rider-minute${minutes === 1 ? '' : 's'} from ${riding} app${riding === 1 ? '' : 's'} in the last 30 days.`
+          : ''
+      );
+      if (shown.length > 0) {
+        const rows = document.getElementById('usage-rows');
+        for (const a of shown.sort((a, b) => b.riders - a.riders || a.id.localeCompare(b.id))) {
+          const tr = document.createElement('tr');
+          for (const value of [a.id, a.versions.join(', ') || '—', `${a.riders} / ${a.connections}`, a.rider_minutes_30d ? `${a.rider_minutes_30d} min` : '—', a.last_seen]) {
+            const td = document.createElement('td');
+            td.textContent = value;
+            tr.append(td);
+          }
+          rows.append(tr);
+        }
+        document.getElementById('usage').hidden = false;
+      }
+    })
+    .catch(() => set('live', 'The live numbers could not be loaded.'));
+})();
+</script>
 </body>
 </html>

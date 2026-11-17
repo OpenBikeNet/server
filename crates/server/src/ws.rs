@@ -169,6 +169,7 @@ pub fn spawn_tickers(state: Arc<AppState>) {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(landing))
+        .route("/privacy", get(privacy))
         .route("/v0", get(ws_handler))
         .route("/v0/stats", get(stats_handler))
         .route("/healthz", get(healthz))
@@ -180,8 +181,21 @@ pub fn router(state: Arc<AppState>) -> Router {
 static LANDING: LazyLock<String> =
     LazyLock::new(|| include_str!("landing.html").replace("{{VERSION}}", env!("CARGO_PKG_VERSION")));
 
-async fn landing() -> Html<&'static str> {
-    Html(LANDING.as_str())
+async fn landing(State(state): State<Arc<AppState>>) -> Html<String> {
+    let rows = lock(&state.presence)
+        .route_list()
+        .into_iter()
+        .map(|(id, length)| format!("<tr><td><code>{id}</code></td><td>{length:.0} m</td></tr>"))
+        .collect::<String>();
+    Html(LANDING.replace("{{ROUTES}}", &rows))
+}
+
+/// What the public server stores, and what it never stores.
+static PRIVACY: LazyLock<String> =
+    LazyLock::new(|| include_str!("privacy.html").replace("{{VERSION}}", env!("CARGO_PKG_VERSION")));
+
+async fn privacy() -> Html<&'static str> {
+    Html(PRIVACY.as_str())
 }
 
 async fn healthz() -> &'static str {

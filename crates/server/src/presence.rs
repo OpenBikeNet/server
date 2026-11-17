@@ -71,6 +71,11 @@ impl Presence {
         }
     }
 
+    /// The routes this server offers, for the landing page.
+    pub fn route_list(&self) -> Vec<(String, f64)> {
+        self.routes.list().map(|r| (r.id.clone(), r.length)).collect()
+    }
+
     pub fn connect(&mut self, conn: ConnId, app: AppInfo) {
         self.conns.insert(
             conn,

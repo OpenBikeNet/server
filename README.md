@@ -1,6 +1,7 @@
 # OpenBikeNet Server
 
-**Status: early draft, implements protocol v0.**
+**Status: implements protocol v0.2. A public instance runs at
+[openbikenet.cloud](https://openbikenet.cloud).**
 
 This is the reference server for the [OpenBikeNet protocol](https://github.com/OpenBikeNet/protocol):
 a shared, neutral server that lets riders of different indoor cycling apps see each other on
@@ -13,6 +14,29 @@ Ideas and feedback are welcome in its Discussions.
 
 A public instance runs at [openbikenet.cloud](https://openbikenet.cloud). Apps connect to
 `wss://openbikenet.cloud/v0`, and `https://openbikenet.cloud/v0/stats` shows which apps are on.
+
+## Shared routes
+
+The server serves every route file in `protocol/routes`. A position on a route is a distance in
+metres from its start, so the same distance means the same spot in every app.
+
+| Route ID | Length | Notes |
+| --- | --- | --- |
+| `velodrome-250` | 250 m | A flat velodrome, the first shared route |
+| `herne-hill-450` | 450 m | Herne Hill Velodrome, anticlockwise as raced |
+| `herne-hill-450-clockwise` | 450 m | The same track the other way round |
+
+## Apps
+
+- [OpenRadlr](https://openradlr.com): the first app on the network and the reference
+  implementation.
+- [VeloPopuli](https://velopopuli.com): has the shared Herne Hill track; the OpenBikeNet link is
+  in review.
+
+## Privacy
+
+`GET /privacy` describes what the public server stores. In short: per-app counts and dates, never
+rider names, positions or IP addresses. The landing page shows live usage and the last 30 days.
 
 ## Running it
 
